@@ -134,6 +134,9 @@ GET /random HTTP/1.1
 
 **Vaibhav Ranjan**
 
+24/CS/477  
+B.Tech CSE (2024–2028)  
+
 Delhi Technological University (DTU)
 
 Computer Science and Engineering

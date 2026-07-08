@@ -1,6 +1,9 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <fstream>
+#include <filesystem>
+#include <thread>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -20,114 +23,209 @@ string buildResponse(const string& status,
            + body;
 }
 
-int main() {
+string readFile(const string& filePath)
+{
+    ifstream file(filePath, ios::binary);
 
-    // Create TCP socket
-    int serverFd = socket(AF_INET, SOCK_STREAM, 0);
+    if (!file.is_open())
+        return "";
 
-    if (serverFd < 0) {
-        cerr << "Socket creation failed!" << endl;
+    stringstream buffer;
+    buffer << file.rdbuf();
+
+    return buffer.str();
+}
+
+string getContentType(const string& filePath)
+{
+    if (filePath.size() >= 5 &&
+        filePath.substr(filePath.size() - 5) == ".html")
+        return "text/html";
+
+    if (filePath.size() >= 4 &&
+        filePath.substr(filePath.size() - 4) == ".css")
+        return "text/css";
+
+    if (filePath.size() >= 3 &&
+        filePath.substr(filePath.size() - 3) == ".js")
+        return "application/javascript";
+
+    if (filePath.size() >= 4 &&
+        filePath.substr(filePath.size() - 4) == ".png")
+        return "image/png";
+
+    if (filePath.size() >= 4 &&
+        filePath.substr(filePath.size() - 4) == ".jpg")
+        return "image/jpeg";
+
+    if (filePath.size() >= 5 &&
+        filePath.substr(filePath.size() - 5) == ".jpeg")
+        return "image/jpeg";
+
+    if (filePath.size() >= 4 &&
+        filePath.substr(filePath.size() - 4) == ".ico")
+        return "image/x-icon";
+
+    return "text/plain";
+}
+
+string routeRequest(const string& method,
+                    const string& path)
+{
+    if (method != "GET")
+    {
+        cout << "[405] " << method << " " << path << endl;
+
+        return buildResponse(
+            "405 Method Not Allowed",
+            "text/plain",
+            "405 Method Not Allowed"
+        );
+    }
+
+    if (path.find("..") != string::npos)
+    {
+        cout << "[403] " << path << endl;
+
+        return buildResponse(
+            "403 Forbidden",
+            "text/plain",
+            "403 Forbidden"
+        );
+    }
+
+    string filePath;
+
+    if (path == "/")
+        filePath = "public/index.html";
+    else
+        filePath = "public" + path;
+
+    if (!filesystem::exists(filePath))
+    {
+        cout << "[404] " << path << endl;
+
+        return buildResponse(
+            "404 Not Found",
+            "text/html",
+            readFile("public/404.html")
+        );
+    }
+
+    cout << "[200] " << path << endl;
+
+    return buildResponse(
+        "200 OK",
+        getContentType(filePath),
+        readFile(filePath)
+    );
+}
+
+void handleClient(int clientFd)
+{
+    char buffer[4096] = {0};
+
+    int bytesReceived =
+        recv(clientFd,
+             buffer,
+             sizeof(buffer) - 1,
+             0);
+
+    if (bytesReceived <= 0)
+    {
+        close(clientFd);
+        return;
+    }
+
+    stringstream request(buffer);
+
+    string method;
+    string path;
+    string version;
+
+    request >> method
+            >> path
+            >> version;
+
+    cout << "\n---------------------------------\n";
+    cout << method << " "
+         << path << " "
+         << version << endl;
+
+    string response =
+        routeRequest(method,
+                     path);
+
+    send(clientFd,
+         response.c_str(),
+         response.size(),
+         0);
+
+    close(clientFd);
+}
+
+int main()
+{
+    int serverFd =
+        socket(AF_INET,
+               SOCK_STREAM,
+               0);
+
+    if (serverFd < 0)
+    {
+        cerr << "Socket creation failed!\n";
         return 1;
     }
 
-    // Allow immediate reuse of port
     int opt = 1;
-    setsockopt(serverFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    // Configure server address
+    setsockopt(serverFd,
+               SOL_SOCKET,
+               SO_REUSEADDR,
+               &opt,
+               sizeof(opt));
+
     sockaddr_in serverAddr{};
+
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_addr.s_addr = INADDR_ANY;
     serverAddr.sin_port = htons(8080);
 
-    // Bind socket
-    if (::bind(serverFd, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
-        cerr << "Bind failed!" << endl;
-        close(serverFd);
+    if (::bind(serverFd,
+               (sockaddr*)&serverAddr,
+               sizeof(serverAddr)) < 0)
+    {
+        cerr << "Bind failed!\n";
         return 1;
     }
 
-    // Start listening
-    if (listen(serverFd, 5) < 0) {
-        cerr << "Listen failed!" << endl;
-        close(serverFd);
+    if (listen(serverFd, 10) < 0)
+    {
+        cerr << "Listen failed!\n";
         return 1;
     }
 
-    cout << "Server listening on http://localhost:8080" << endl;
+    cout << "=====================================\n";
+    cout << " C++ HTTP Server Running\n";
+    cout << " http://localhost:8080\n";
+    cout << "=====================================\n";
 
-    while (true) {
-
+    while (true)
+    {
         sockaddr_in clientAddr{};
         socklen_t clientLen = sizeof(clientAddr);
 
-        int clientFd = accept(serverFd,
-                              (sockaddr*)&clientAddr,
-                              &clientLen);
+        int clientFd =
+            accept(serverFd,
+                   (sockaddr*)&clientAddr,
+                   &clientLen);
 
-        if (clientFd < 0) {
-            cerr << "Accept failed!" << endl;
+        if (clientFd < 0)
             continue;
-        }
 
-        cout << "Client connected!" << endl;
+        thread clientThread(handleClient, clientFd);
 
-        char buffer[4096] = {0};
-
-        int bytesReceived = recv(clientFd,
-                                 buffer,
-                                 sizeof(buffer) - 1,
-                                 0);
-
-        if (bytesReceived < 0) {
-            cerr << "recv failed!" << endl;
-            close(clientFd);
-            continue;
-        }
-
-        if (bytesReceived == 0) {
-            cout << "Client disconnected without sending data." << endl;
-            close(clientFd);
-            continue;
-        }
-
-        cout << "----- Raw request received -----" << endl;
-        cout.write(buffer, bytesReceived);
-        cout << endl;
-        cout << "--------------------------------" << endl;
-
-        stringstream requestStream(buffer);
-
-        string method;
-        string path;
-        string version;
-
-        requestStream >> method >> path >> version;
-
-        cout << endl;
-        cout << "Method  : " << method << endl;
-        cout << "Path    : " << path << endl;
-        cout << "Version : " << version << endl;
-        cout << endl;
-
-        string body = "Hello from my C++ HTTP Server!";
-
-        string response = buildResponse(
-            "200 OK",
-            "text/plain",
-            body
-        );
-
-        ssize_t bytesSent = send(clientFd,
-                                 response.c_str(),
-                                 response.size(),
-                                 0);
-
-        if (bytesSent < 0) {
-            cerr << "send failed!" << endl;
-        }
-
-        close(clientFd);
+        clientThread.detach();
     }
 
     close(serverFd);
